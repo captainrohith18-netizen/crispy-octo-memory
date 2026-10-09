@@ -17,7 +17,7 @@ from core.text_cleaner import normalize_question
 class RAGPipeline:
     """A minimal but educational RAG pipeline for a workshop demo."""
 
-    def __init__(self, chunk_size: int = 250, overlap: int = 50, top_k: int = 3, min_score: float = 0.05):
+    def __init__(self, chunk_size: int = 250, overlap: int = 50, top_k: int = 3, min_score: float = 0.2):
         self.chunk_size = chunk_size
         self.overlap = overlap
         self.top_k = top_k
@@ -27,25 +27,94 @@ class RAGPipeline:
         self.chunk_vectors = np.empty((0, 0), dtype=np.float32)
         self.document_metadata = {}
 
-    def index_document(self, file_path: str | Path) -> dict:
-        file_path = Path(file_path)
-        payload = extract_document_text(file_path)
-        self.document_name = payload["filename"]
-        self.document_metadata = {
-            "filename": payload["filename"],
-            "file_type": payload["file_type"],
-            "page_count": payload["page_count"],
-            "char_count": payload["char_count"],
+    @staticmethod
+    def _token_overlap_ratio(question: str, text: str) -> float:
+        stop_words = {
+            "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "have", "if",
+            "in", "into", "is", "it", "its", "of", "on", "or", "that", "the", "their", "there",
+            "this", "to", "was", "were", "what", "when", "where", "which", "who", "why", "with",
         }
 
-        cleaned_text = payload["text"]
-        page_texts = payload.get("pages") or [cleaned_text]
-        self.chunks = chunk_document(
-            cleaned_text,
-            source_name=payload["filename"],
-            page_texts=page_texts,
-            chunk_size=self.chunk_size,
-            overlap=self.overlap,
+        question_tokens = {
+            token for token in normalize_question(question).split()
+            if len(token) > 2 and token.lower() not in stop_words
+        }
+        if not question_tokens:
+            return 0.0
+
+        text_tokens = {
+            token for token in normalize_question(text).split()
+            if len(token) > 2 and token.lower() not in stop_words
+        }
+        if not text_tokens:
+            return 0.0
+
+        return len(question_tokens & text_tokens) / len(question_tokens)
+
+    @classmethod
+    def _is_related_question(cls, question: str, results: list[dict]) -> bool:
+        if not results:
+            return False
+
+        best_similarity = max(item["score"] for item in results)
+        best_overlap = max(cls._token_overlap_ratio(question, item["text"]) for item in results)
+
+        if best_overlap <= 0:
+            return False
+
+        return best_similarity >= 0.25 or best_overlap >= 0.15
+
+    def reset_index(self):
+        self.document_name = None
+        self.chunks = []
+        self.chunk_vectors = np.empty((0, 0), dtype=np.float32)
+        self.document_metadata = {}
+
+    def index_document(self, file_path: str | Path) -> dict:
+        return self.index_documents([file_path])
+
+    def index_documents(self, file_paths: list[str | Path]) -> dict:
+        self.reset_index()
+        file_paths = [Path(path) for path in file_paths if path]
+        if not file_paths:
+            raise ValueError("Please select at least one document to index.")
+
+        indexed_documents = []
+        all_chunks = []
+        total_page_count = 0
+        total_char_count = 0
+
+        for file_path in file_paths:
+            payload = extract_document_text(file_path)
+            cleaned_text = payload["text"]
+            page_texts = payload.get("pages") or [cleaned_text]
+            document_chunks = chunk_document(
+                cleaned_text,
+                source_name=payload["filename"],
+                page_texts=page_texts,
+                chunk_size=self.chunk_size,
+                overlap=self.overlap,
+            )
+
+            indexed_documents.append({
+                "filename": payload["filename"],
+                "file_type": payload["file_type"],
+                "page_count": payload["page_count"],
+                "char_count": payload["char_count"],
+            })
+            all_chunks.extend(document_chunks)
+            total_page_count += payload["page_count"]
+            total_char_count += payload["char_count"]
+
+        self.document_metadata = {
+            "documents": indexed_documents,
+            "document_count": len(indexed_documents),
+            "page_count": total_page_count,
+            "char_count": total_char_count,
+        }
+        self.chunks = all_chunks
+        self.document_name = (
+            indexed_documents[0]["filename"] if len(indexed_documents) == 1 else f"{len(indexed_documents)} documents"
         )
 
         if self.chunks:
@@ -55,9 +124,11 @@ class RAGPipeline:
 
         return {
             "document_name": self.document_name,
+            "document_names": [doc["filename"] for doc in indexed_documents],
+            "document_count": len(indexed_documents),
             "chunk_count": len(self.chunks),
-            "char_count": payload["char_count"],
-            "page_count": payload["page_count"],
+            "char_count": total_char_count,
+            "page_count": total_page_count,
             "indexed": bool(self.chunks),
         }
 
@@ -89,12 +160,12 @@ class RAGPipeline:
                 "top_k": selected_k,
             }
 
-        if not results:
+        if not self._is_related_question(cleaned_question, results):
             return {
-                "answer": "No relevant information was found in the uploaded document for that question. Please ask a question related to the document content.",
+                "answer": "This question is not related to the uploaded document. Please ask a question based on the current document content.",
                 "retrieved_chunks": [],
                 "used_model": None,
-                "model_status": {"model": None, "message": "No matching document context was retrieved."},
+                "model_status": {"model": None, "message": "No relevant document context matched the question."},
             }
 
         context_parts = []

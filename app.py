@@ -36,7 +36,7 @@ with st.sidebar:
     st.markdown("<div class='sidebar-panel'>", unsafe_allow_html=True)
     st.header("Settings")
     top_k = st.slider("Top-K", min_value=1, max_value=8, value=3)
-    min_score = st.slider("Minimum similarity", min_value=0.0, max_value=1.0, value=0.05, step=0.01)
+    min_score = st.slider("Minimum similarity", min_value=0.0, max_value=1.0, value=0.2, step=0.01)
     chunk_size = st.slider("Chunk size", min_value=100, max_value=600, value=250, step=50)
     overlap = st.slider("Chunk overlap", min_value=10, max_value=200, value=50, step=10)
     temperature = st.slider("Temperature", min_value=0.0, max_value=1.0, value=0.1, step=0.05)
@@ -102,12 +102,20 @@ with upload_col:
                 except Exception as exc:
                     st.error(f"Sample document could not be loaded: {exc}")
 
-    uploaded_file = st.file_uploader("Upload a PDF or DOCX", type=["pdf", "docx"], help="Supported formats: PDF and DOCX")
-    if uploaded_file is not None:
+    uploaded_files = st.file_uploader(
+        "Upload one or more PDF/DOCX files",
+        type=["pdf", "docx"],
+        accept_multiple_files=True,
+        help="Upload multiple files; answers will be grounded only in the uploaded document set.",
+    )
+    if uploaded_files:
         target_dir = Path("data/uploads")
         target_dir.mkdir(parents=True, exist_ok=True)
-        save_path = target_dir / uploaded_file.name
-        save_path.write_bytes(uploaded_file.getvalue())
+        saved_paths = []
+        for uploaded_file in uploaded_files:
+            save_path = target_dir / uploaded_file.name
+            save_path.write_bytes(uploaded_file.getvalue())
+            saved_paths.append(save_path)
 
         with st.spinner("Extracting text, chunking, and generating local embeddings..."):
             st.session_state.pipeline.chunk_size = chunk_size
@@ -115,9 +123,12 @@ with upload_col:
             st.session_state.pipeline.top_k = top_k
             st.session_state.pipeline.min_score = min_score
             try:
-                document_summary = st.session_state.pipeline.index_document(save_path)
+                document_summary = st.session_state.pipeline.index_documents(saved_paths)
                 st.session_state.document_summary = document_summary
-                st.success(f"Indexed {document_summary['document_name']} successfully.")
+                if document_summary["document_count"] > 1:
+                    st.success(f"Indexed {document_summary['document_count']} documents successfully.")
+                else:
+                    st.success(f"Indexed {document_summary['document_name']} successfully.")
             except Exception as exc:
                 st.error(f"Document processing failed: {exc}")
                 st.session_state.document_summary = None
@@ -182,6 +193,10 @@ if prompt:
             )
             answer = result["answer"]
             st.session_state.messages.append({"role": "assistant", "content": answer})
+
+            if not result.get("retrieved_chunks") or "not related" in answer.lower():
+                st.warning("This question is not related to the uploaded document. Please ask a question based on the current document content.")
+
             with st.chat_message("assistant"):
                 st.markdown(answer)
 
