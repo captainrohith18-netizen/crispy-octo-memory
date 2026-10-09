@@ -1,0 +1,46 @@
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+
+# Test and tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local environment and editor files
+.env
+.env.*
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sqlite3
+*.db
+*.log
+
+# Streamlit / app runtime
+.streamlit/secrets.toml
+.streamlit/*.json
+
+# Generated upload and output artifacts
+# Keep the uploads folder, but ignore files added at runtime.
+data/uploads/*
+!data/uploads/.gitkeep
+
+# Build and packaging outputs
+/dist/
+*.zip
+*.tar.gz
+
+# Notebook checkpoints
+.ipynb_checkpoints/
